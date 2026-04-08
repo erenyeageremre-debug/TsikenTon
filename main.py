@@ -18,18 +18,17 @@ KELIME_OYUN_ID = 1491525352986513448
 GIRIS_KANAL_ID = 1470880011840917555
 YONETICI_IDLERI = [1001441485901807688, 1453087302330093669]
 
-# ================= YAPAY ZEKA (GEMINI 1.5 FLASH) =================
+# ================= YAPAY ZEKA =================
 genai.configure(api_key=GEMINI_API_KEY)
 sistem_karakteri = (
     "Senin adın Tsiken Ton. Harbi ve net bir Discord botusun. "
     "Asla 'vanguard', 'koruma sistemi' gibi cringe triplere girme. "
-    "Sana 'Vanguard mısın' derlerse 'boş yapma' de geç. "
     "Cevapların kısa ve düz olsun. Gerekirse argo kullan, robot gibi davranma. "
     "Sadece Türkçe konuş."
 )
 
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash", # En hızlı ücretsiz model
+    model_name="gemini-1.5-flash",
     system_instruction=sistem_karakteri
 )
 
@@ -42,15 +41,15 @@ son_kelime = "elma"
 son_kisi_id = None
 kontrol_ediliyor = False
 kullanilan_kelimeler = ["elma"]
-islem_takibi = {}
-user_messages = {}
+islem_takibi = {} # Anti-nuke için
+user_messages = {} # Anti-spam için
 
 def tr_lower(text):
     return text.replace('I', 'ı').replace('İ', 'i').lower()
 
 @bot.event
 async def on_ready():
-    print(f"----------------------------------------\n[{bot.user.name}] Render üzerinden harbi modda aktif.\n----------------------------------------")
+    print(f"----------------------------------------\n[{bot.user.name}] ZIRHLI MODDA AKTİF.\n----------------------------------------")
 
 # --- MODERASYON KOMUTLARI ---
 @bot.command()
@@ -66,73 +65,50 @@ async def mute(ctx, member: discord.Member, sure: int = 10):
             await ctx.send(f"🔇 {member.mention}, {sure} dakika susturuldu.")
         except: await ctx.send("❌ Yetkim yetmiyor.")
 
-# --- KELİME OYUNU MANTIĞI (ERENSI STYLE) ---
+# --- KELİME OYUNU SİSTEMİ ---
 async def kelime_oyunu_islem(message):
     global son_kelime, son_kisi_id, kontrol_ediliyor, kullanilan_kelimeler
-    
     kelime = tr_lower(message.content.strip())
     if kontrol_ediliyor:
         await message.delete()
         return
-
     kontrol_ediliyor = True
     try:
-        # Kurallar: Tek kelime mi? Sıra başkasında mı? Harf uyuyor mu?
         if len(kelime.split()) > 1 or message.author.id == son_kisi_id or not kelime.startswith(son_kelime[-1]):
-            await message.add_reaction('❌')
-            await message.delete(delay=3)
-            return
-
-        # Tekrar Engeli
+            await message.add_reaction('❌'); await message.delete(delay=3); return
         if kelime in kullanilan_kelimeler:
-            await message.add_reaction('❌')
-            uyari = await message.channel.send(f"{message.author.mention}, bu kelime zaten yazıldı!")
-            await message.delete(delay=3)
-            await uyari.delete(delay=3)
-            return
-
-        # TDK Onayı
+            await message.add_reaction('❌'); await message.delete(delay=3); return
+        
         async with aiohttp.ClientSession() as session:
-            headers = {'User-Agent': 'Mozilla/5.0'}
             try:
                 async with session.get(f"https://sozluk.gov.tr/gts?ara={urllib.parse.quote(kelime)}", timeout=5) as resp:
                     if resp.status == 200:
                         veri = await resp.json()
                         if isinstance(veri, dict) and "error" in veri:
-                            await message.add_reaction('❌')
-                            await message.delete(delay=3)
-                            return
-                    else: return # Site çökerse onay verme
+                            await message.add_reaction('❌'); await message.delete(delay=3); return
+                    else: return
             except: return
 
-        # Kabul edildi
         kullanilan_kelimeler.append(kelime)
-        son_kelime = kelime
-        son_kisi_id = message.author.id
+        son_kelime = kelime; son_kisi_id = message.author.id
         await message.add_reaction('✅')
-
-        # Ğ ile Biterse Kazanan İlan Et
         if kelime.endswith('ğ'):
-            embed = discord.Embed(title="Oyun Bitti!", description=f"🏆 Kazanan: {message.author.mention}\nKelime: **{kelime.upper()}**\n\n'Ğ' ile kelime olmadığı için yeni tur başlıyor!\nBaşlangıç: **KİTAP**", color=0x2b2d31)
-            await message.channel.send(embed=embed)
-            son_kelime = "kitap"
-            son_kisi_id = None
-            kullanilan_kelimeler = ["kitap"]
-    finally:
-        kontrol_ediliyor = False
+            await message.channel.send(f"🏆 **OYUN BİTTİ!** {message.author.mention} 'Ğ' ile kazandı. Yeni tur: **KİTAP**")
+            son_kelime = "kitap"; son_kisi_id = None; kullanilan_kelimeler = ["kitap"]
+    finally: kontrol_ediliyor = False
 
 # --- ANA MESAJ DİNLEYİCİ ---
 @bot.event
 async def on_message(message):
     if message.author.bot: return
 
-    # 1. Kelime Oyunu Kanalı
+    # 1. Kelime Oyunu
     if message.channel.id == KELIME_OYUN_ID:
         if not message.content.startswith('!'):
             await kelime_oyunu_islem(message)
             return
 
-    # 2. Bot Sohbet (Yapay Zeka)
+    # 2. Yapay Zeka Sohbet
     if bot.user.mentioned_in(message) and message.channel.id != KELIME_OYUN_ID:
         soru = message.content.replace(f'<@{bot.user.id}>', '').strip()
         if soru and model:
@@ -141,18 +117,20 @@ async def on_message(message):
                     cevap = await asyncio.to_thread(model.generate_content, soru)
                     await message.reply(cevap.text)
                 except Exception as e:
-                    if "429" in str(e): await message.reply("Google kota koydu, az yavaş.")
-                    else: await message.reply("Meşgulüm, sonra gel.")
+                    if "429" in str(e): await message.reply("Google kota koydu, yavaş.")
+                    else: await message.reply("Meşgulüm kanka sonra gel.")
             return
 
-    # 3. Korumalar (Link & Spam)
+    # 3. KORUMALAR (Link & Spam)
     if message.author.id not in YONETICI_IDLERI:
+        # Link Engelleme + Mute
         if "http" in message.content or "discord.gg" in message.content:
             await message.delete()
-            try: await message.author.timeout(timedelta(minutes=10), reason="Link")
+            try: await message.author.timeout(timedelta(minutes=10), reason="Link Paylaşımı")
             except: pass
             return
 
+        # Spam Engelleme (5sn/4 Mesaj) + Mute
         now = time.time()
         uid = message.author.id
         if uid not in user_messages: user_messages[uid] = []
@@ -166,14 +144,30 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# --- SİSTEM KORUMALARI (ANTI-NUKE) ---
+# --- GELİŞMİŞ SİSTEM KORUMALARI (ANTI-NUKE) ---
+
+@bot.event
+async def on_member_update(before, after):
+    # Kendi rollerimizi koruyalım
+    if before.id == bot.user.id:
+        alinan_roller = set(before.roles) - set(after.roles)
+        if alinan_roller:
+            async for entry in after.guild.audit_logs(action=discord.AuditLogAction.member_role_update, limit=1):
+                if entry.target.id == bot.user.id and entry.user.id not in YONETICI_IDLERI:
+                    for rol in alinan_roller:
+                        try: await after.add_roles(rol)
+                        except: pass
+                    log = bot.get_channel(LOG_KANAL_ID)
+                    if log: await log.send(f"🛡️ **Rol Koruması:** {entry.user.mention} benden rol almaya çalıştı, engelledim.")
+
 @bot.event
 async def on_guild_channel_delete(channel):
     async for entry in channel.guild.audit_logs(action=discord.AuditLogAction.channel_delete, limit=1):
         if entry.user.id in YONETICI_IDLERI: return
+        # Kanalları geri aç
         await channel.category.create_text_channel(name=channel.name, overwrites=channel.overwrites)
         log = bot.get_channel(LOG_KANAL_ID)
-        if log: await log.send(f"⚠️ **Kanal Silindi:** {channel.name}. Silen: {entry.user.mention}. Geri açıldı.")
+        if log: await log.send(f"⚠️ **Kanal Koruması:** {channel.name} silindi! Silen: {entry.user.mention}. Kanal geri oluşturuldu.")
 
 @bot.event
 async def on_member_remove(member):
@@ -185,16 +179,16 @@ async def on_member_remove(member):
             if u_id not in islem_takibi: islem_takibi[u_id] = []
             islem_takibi[u_id].append(now)
             islem_takibi[u_id] = [t for t in islem_takibi[u_id] if now - t < 10]
+            
             if len(islem_takibi[u_id]) >= 3:
-                # Toplu işlem yapanın yetkisini al
+                # Toplu kick/ban yapanın yetkilerini al
                 for role in member.guild.me.top_role.guild.roles:
-                    if role.permissions.administrator and role.managed is False:
+                    if role.permissions.administrator and not role.managed:
                         try: await entry.user.remove_roles(role)
                         except: pass
                 log = bot.get_channel(LOG_KANAL_ID)
-                if log: await log.send(f"🚨 **Anti-Nuke:** {entry.user.mention} çok fazla kişiyi attı, yetkileri alındı.")
+                if log: await log.send(f"🚨 **Anti-Nuke:** {entry.user.mention} saldırı girişimi yaptı, yetkileri alındı!")
 
-# --- GİRİŞ KARŞILAMA ---
 @bot.event
 async def on_member_join(member):
     kanal = bot.get_channel(GIRIS_KANAL_ID)
