@@ -17,11 +17,12 @@ GEMINI_API_KEY = os.getenv('GEMINI_KEY')
 KELIME_OYUN_ID = 1491525352986513448
 GIRIS_KANAL_ID = 1470880011840917555
 YONETICI_IDLERI = [1001441485901807688, 1453087302330093669]
-PATRON_ID = 1453087302330093669 # <-- Loglar direkt bu ID'ye DM gidecek
+PATRON_ID = 1453087302330093669 
 
 # ================= YAPAY ZEKA =================
 genai.configure(api_key=GEMINI_API_KEY)
-sistem_karakteri = "Senin adın Tsiken Ton. Harbi ve net bir Discord botusun. Cringe triplere girme, kısa ve düz cevap ver. Argo kullanabilirsin. Sadece Türkçe konuş."
+# Kişilik tamamen düzeltildi. Cringe sıfır.
+sistem_karakteri = "Senin adın Tsiken Ton. Sıradan birisin, asla bot gibi konuşma. Kasıntı laflar etme, şov yapma. Biri sana soru sorarsa dümdüz, kısa ve net cevap ver. Argo kullanabilirsin."
 
 model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=sistem_karakteri)
 
@@ -39,36 +40,24 @@ user_messages = {}
 def tr_lower(text):
     return text.replace('I', 'ı').replace('İ', 'i').lower()
 
-# --- DM RAPORLAMA FONKSİYONU ---
 async def patrona_rapor_ver(mesaj):
     try:
         patron = bot.get_user(PATRON_ID) or await bot.fetch_user(PATRON_ID)
         if patron:
             await patron.send(mesaj)
-    except Exception as e:
-        print(f"Patrona DM atılamadı (DM'leri kapalı olabilir): {e}")
+    except: pass
 
 @bot.event
 async def on_ready():
-    print(f"[{bot.user.name}] ONLINE VE ÇELİK YELEKLİ.")
-    kanal = bot.get_channel(KELIME_OYUN_ID)
-    if kanal:
-        await kanal.send(f"✅ **Sistem Yenilendi!** Kelime oyunu devam ediyor. Son kelime: **{son_kelime.upper()}**")
-    
-    # Başladığını sana da haber versin
-    await patrona_rapor_ver("🟢 **Tsiken Ton Aktif:** Kanka ben sunucuda nöbetteyim, bir sıkıntı olursa direkt buraya yazacağım.")
+    print(f"[{bot.user.name}] Aktif.")
+    # Sadece sana sessizce mesaj atar, chate şov yapmaz.
+    await patrona_rapor_ver("🟢 **Sistem Aktif.** Sessiz modda nöbetteyim.")
 
-# --- KENDİNİ KORUMA / HATA YAKALAMA (SELF-HEALING) ---
+# --- SESSİZ HATA YAKALAMA ---
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    await patrona_rapor_ver(f"⚠️ **Kod Sıkıntısı Yakalandı:**\nKomut: `{ctx.message.content}`\nHata: `{str(error)}`")
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    err_str = traceback.format_exc()
-    print(f"SİSTEM HATASI ENGELLENDİ: {event}\n{err_str}")
+    if isinstance(error, commands.CommandNotFound): return
+    await patrona_rapor_ver(f"⚠️ **Hata:** `{ctx.message.content}` -> `{str(error)}`")
 
 # --- KOMUTLAR ---
 @bot.command()
@@ -80,17 +69,18 @@ async def sil(ctx, miktar: int):
 async def mute(ctx, member: discord.Member, sure: int = 10):
     if ctx.author.id in YONETICI_IDLERI or ctx.author.guild_permissions.moderate_members:
         try:
-            await member.timeout(timedelta(minutes=sure), reason="Manuel Mute")
-            await ctx.send(f"🔇 {member.mention}, {sure} dakika susturuldu.")
-        except: await ctx.send("❌ Yetkim yetmiyor.")
+            await member.timeout(timedelta(minutes=sure))
+            msg = await ctx.send(f"{member.mention} susturuldu ({sure}dk).")
+            await msg.delete(delay=3) # Chati kirletmemek için mesajı siler
+        except: pass
 
-# --- MESAJ TAKİBİ ---
+# --- MESAJ İŞLEMLERİ ---
 @bot.event
 async def on_message(message):
     global son_kelime, son_kisi_id, kontrol_ediliyor, kullanilan_kelimeler
     if message.author.bot: return
 
-    # 1. Kelime Oyunu
+    # 1. KELİME OYUNU (ERENSI STYLE - TERTEMİZ)
     if message.channel.id == KELIME_OYUN_ID:
         if message.content.startswith('!'):
             await bot.process_commands(message)
@@ -102,45 +92,59 @@ async def on_message(message):
         
         kontrol_ediliyor = True
         try:
+            # Temel hata kontrolü (sessizce siler, uyarı atıp chati kirletmez)
             if len(kelime.split()) > 1 or message.author.id == son_kisi_id or not kelime.startswith(son_kelime[-1]) or kelime in kullanilan_kelimeler:
-                await message.add_reaction('❌'); await message.delete(delay=3); return
+                await message.add_reaction('❌')
+                await message.delete(delay=2)
+                return
             
+            # TDK Kontrolü
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"https://sozluk.gov.tr/gts?ara={urllib.parse.quote(kelime)}") as resp:
                     if resp.status == 200:
                         veri = await resp.json()
                         if isinstance(veri, dict) and "error" in veri:
-                            await message.add_reaction('❌'); await message.delete(delay=3); return
+                            await message.add_reaction('❌')
+                            await message.delete(delay=2)
+                            return
                     else: return
 
+            # Kelime doğruysa
             kullanilan_kelimeler.append(kelime)
-            son_kelime = kelime; son_kisi_id = message.author.id
+            son_kelime = kelime
+            son_kisi_id = message.author.id
             await message.add_reaction('✅')
+            
+            # Bitiş durumu
             if kelime.endswith('ğ'):
-                await message.channel.send(f"🏆 {message.author.mention} KAZANDI! Yeni kelime: **KİTAP**")
+                embed = discord.Embed(description=f"🎉 {message.author.mention} oyunu kazandı!\n\nYeni kelime: **kitap**", color=0x2b2d31)
+                await message.channel.send(embed=embed)
                 son_kelime = "kitap"; son_kisi_id = None; kullanilan_kelimeler = ["kitap"]
         finally:
             kontrol_ediliyor = False
         return
 
-    # 2. Yapay Zeka
+    # 2. YAPAY ZEKA (Sohbet)
     if bot.user.mentioned_in(message):
         soru = message.content.replace(f'<@{bot.user.id}>', '').strip()
         async with message.channel.typing():
             try:
                 cevap = await asyncio.to_thread(model.generate_content, soru)
                 await message.reply(cevap.text)
-            except: await message.reply("Şu an meşgulüm kanka.")
+            except: 
+                pass # Hata verirse chate "meşgulüm" bile yazmasın, susup geçsin (havalı durur)
         return
 
-    # 3. Korumalar (Link & Spam)
+    # 3. KORUMALAR (Sessiz İnfaz)
     if message.author.id not in YONETICI_IDLERI:
+        # Link
         if "http" in message.content or "discord.gg" in message.content:
             await message.delete()
             try: await message.author.timeout(timedelta(minutes=10))
             except: pass
             return
 
+        # Spam
         now = time.time()
         uid = message.author.id
         if uid not in user_messages: user_messages[uid] = []
@@ -154,7 +158,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# --- ANTI-NUKE ---
+# --- SESSİZ KORUMA (ANTI-NUKE) ---
 @bot.event
 async def on_guild_channel_delete(channel):
     async for entry in channel.guild.audit_logs(action=discord.AuditLogAction.channel_delete, limit=1):
@@ -165,7 +169,8 @@ async def on_guild_channel_delete(channel):
 @bot.event
 async def on_member_join(member):
     kanal = bot.get_channel(GIRIS_KANAL_ID)
-    if kanal: await kanal.send(f"Hoş geldin {member.mention}\nİsim:\nGeliş Sebebim:\nEtiket: <@1001441485901807688>")
+    if kanal: 
+        await kanal.send(f"Hoş geldin {member.mention}\nİsim:\nGeliş Sebebim:\nEtiket: <@1001441485901807688>")
 
 keep_alive()
 bot.run(TOKEN)
